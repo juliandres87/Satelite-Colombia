@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#05080d">
+<title>Satélite Colombia</title>
+<style>
+  :root { --bg:#05080d; --fg:#e6edf3; --muted:#8b98a5; --accent:#4fb3d9; --line:#1c2733; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.4 system-ui,sans-serif; }
+  header { padding:12px 14px 6px; }
+  h1 { font-size:1.1rem; margin:0; font-weight:600; }
+  #estado { color:var(--muted); font-size:.85rem; margin-top:2px; }
+  nav { display:flex; gap:8px; padding:8px 14px; overflow-x:auto; }
+  button { padding:8px 14px; border:1px solid var(--line); border-radius:999px; background:transparent;
+    color:var(--fg); font:inherit; font-size:.9rem; flex:none; }
+  button[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:#04141c; font-weight:600; }
+  button:focus-visible { outline:2px solid var(--fg); outline-offset:2px; }
+  #visor { position:relative; width:100%; height:68vh; overflow:hidden; background:#0a1018; touch-action:none; cursor:grab; }
+  #sat { position:absolute; left:0; top:0; transform-origin:0 0; user-select:none; -webkit-user-drag:none; will-change:transform; }
+  #error { display:none; padding:14px; color:#f0b429; }
+  .barra { display:flex; flex-wrap:wrap; gap:8px; padding:10px 14px; }
+  .pie { padding:4px 14px 20px; color:var(--muted); font-size:.8rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Satélite GOES-19 · Norte de Suramérica</h1>
+  <div id="estado">Cargando…</div>
+</header>
+<nav id="bandas" aria-label="Tipo de imagen"></nav>
+<div id="visor"><img id="sat" alt="Imagen satelital más reciente del norte de Suramérica" draggable="false"></div>
+<div id="error">No se pudo cargar esta imagen. Revisa tu conexión o prueba otro tipo de imagen.</div>
+<div class="barra">
+  <button id="mas" aria-label="Acercar">+</button>
+  <button id="menos" aria-label="Alejar">−</button>
+  <button id="guardar">Guardar esta vista</button>
+  <button id="todo">Ver todo</button>
+  <button id="ahora">Actualizar ahora</button>
+</div>
+<div class="pie">
+  Pellizca para acercar y arrastra para moverte. Cuando encuentres Antioquia y alrededores, toca "Guardar esta vista" y la página abrirá siempre ahí.
+  Fuente: NOAA/NESDIS/STAR. Es una imagen de satélite, no un pronóstico. Para alertas oficiales consulta el IDEAM.
+</div>
+<script>
+const BASE = "https://cdn.star.nesdis.noaa.gov/GOES19/ABI/SECTOR/nsa/";
+const BANDAS = [["GEOCOLOR","Color real / IR noche"],["13","Infrarrojo (nubes y tormentas)"],["Sandwich","Sandwich"],["AirMass","Masas de aire"]];
+const MIN = 10, CLAVE = "vistaSatelite";
+let banda = "GEOCOLOR", ultima = null;
+const visor = document.getElementById("visor"), img = document.getElementById("sat"),
+      estado = document.getElementById("estado"), err = document.getElementById("error"), nav = document.getElementById("bandas");
+
+/* Vista: s = zoom, x e y = desplazamiento en píxeles de pantalla */
+let s = 1, x = 0, y = 0;
+function ancho() { return visor.clientWidth; }
+function limitar() {
+  const w = ancho(), h = img.naturalHeight ? w * img.naturalHeight / img.naturalWidth : w;
+  s = Math.min(Math.max(s, 1), 8);
+  const vh = visor.clientHeight;
+  x = Math.min(0, Math.max(x, w - w * s));
+  y = h * s <= vh ? (vh - h * s) / 2 : Math.min(0, Math.max(y, vh - h * s));
+}
+function aplicar() {
+  limitar();
+  img.style.width = ancho() + "px";
+  img.style.transform = "translate(" + x + "px," + y + "px) scale(" + s + ")";
+}
+function zoomEn(px, py, factor) {
+  const ns = Math.min(Math.max(s * factor, 1), 8), r = ns / s;
+  x = px - (px - x) * r; y = py - (py - y) * r; s = ns; aplicar();
+}
+function verTodo() { s = 1; x = 0; y = 0; aplicar(); }
+function guardar() {
+  try { localStorage.setItem(CLAVE, JSON.stringify({s: s, x: x / ancho(), y: y / ancho()})); estado.textContent = "Vista guardada."; }
+  catch (e) { estado.textContent = "Tu navegador no permitió guardar la vista."; }
+}
+function restaurar() {
+  try {
+    const v = JSON.parse(localStorage.getItem(CLAVE));
+    if (v) { s = v.s; x = v.x * ancho(); y = v.y * ancho(); }
+  } catch (e) {}
+  aplicar();
+}
+
+/* Gestos: un dedo mueve, dos dedos acercan */
+const punteros = new Map(); let distPrev = 0;
+visor.addEventListener("pointerdown", e => { visor.setPointerCapture(e.pointerId); punteros.set(e.pointerId, {x:e.clientX, y:e.clientY}); distPrev = 0; });
+visor.addEventListener("pointermove", e => {
+  if (!punteros.has(e.pointerId)) return;
+  const p = punteros.get(e.pointerId), r = visor.getBoundingClientRect();
+  if (punteros.size === 1) { x += e.clientX - p.x; y += e.clientY - p.y; p.x = e.clientX; p.y = e.clientY; aplicar(); }
+  else {
+    p.x = e.clientX; p.y = e.clientY;
+    const [a, b] = [...punteros.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (distPrev) zoomEn((a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top, d / distPrev);
+    distPrev = d;
+  }
+});
+["pointerup", "pointercancel"].forEach(t => visor.addEventListener(t, e => { punteros.delete(e.pointerId); distPrev = 0; }));
+visor.addEventListener("wheel", e => { e.preventDefault(); const r = visor.getBoundingClientRect(); zoomEn(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.2 : 1 / 1.2); }, {passive:false});
+document.getElementById("mas").onclick = () => zoomEn(ancho() / 2, visor.clientHeight / 2, 1.5);
+document.getElementById("menos").onclick = () => zoomEn(ancho() / 2, visor.clientHeight / 2, 1 / 1.5);
+document.getElementById("guardar").onclick = guardar;
+document.getElementById("todo").onclick = verTodo;
+window.addEventListener("resize", aplicar);
+
+/* Imagen y actualización */
+BANDAS.forEach(([id, nombre]) => {
+  const b = document.createElement("button");
+  b.textContent = nombre; b.dataset.id = id;
+  b.onclick = () => { banda = id; marcar(); cargar(); };
+  nav.appendChild(b);
+});
+function marcar() { nav.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.id === banda)); }
+function cargar() { err.style.display = "none"; estado.textContent = "Cargando…"; img.src = BASE + banda + "/latest.jpg?t=" + Date.now(); }
+let primera = true;
+img.onload = () => { ultima = new Date(); if (primera) { primera = false; restaurar(); } else aplicar(); pintar(); };
+img.onerror = () => { err.style.display = "block"; estado.textContent = "Sin imagen"; };
+function pintar() {
+  if (!ultima) return;
+  const h = ultima.toLocaleTimeString("es-CO", {hour:"2-digit", minute:"2-digit"});
+  const m = Math.floor((Date.now() - ultima) / 60000);
+  estado.textContent = "Descargada a las " + h + " (hace " + m + " min). Se actualiza cada " + MIN + " min.";
+}
+document.getElementById("ahora").onclick = cargar;
+document.addEventListener("visibilitychange", () => { if (!document.hidden && (!ultima || Date.now() - ultima > MIN * 60000)) cargar(); });
+setInterval(cargar, MIN * 60000); setInterval(pintar, 30000);
+marcar(); cargar();
+</script>
+</body>
+</html>
